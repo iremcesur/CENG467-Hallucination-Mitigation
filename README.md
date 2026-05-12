@@ -13,10 +13,15 @@ mitigate hallucinations in question answering tasks.
 
 ## Repository Structure
 ├── data/               # Dataset download and preprocessing scripts
+
 ├── baselines/          # Baseline implementation scripts
+
 ├── evaluation/         # Evaluation and metric scripts
+
 ├── notebooks/          # Experiment notebooks
+
 ├── requirements.txt    # Python dependencies
+
 └── README.md
 
 ## Setup
