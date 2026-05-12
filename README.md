@@ -57,5 +57,8 @@ See `requirements.txt`
 4. Run all cells in order
 
 ## Notes
-- API keys are not committed to this repository. Set them as variables in the notebook.
 - Dataset files are saved to Google Drive under `ceng467_project/data/`
+
+## Prompts & API Configuration
+Prompt templates and API configuration are documented in `notebooks/data_and_baseline1.ipynb`.
+API keys are loaded as variables in the notebook and are not committed to this repository.
