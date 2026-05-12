@@ -1,0 +1,6 @@
+datasets
+huggingface_hub
+groq
+numpy
+scikit-learn
+sentence-transformers
