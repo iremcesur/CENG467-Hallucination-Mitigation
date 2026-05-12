@@ -43,4 +43,19 @@ pip install -r requirements.txt
 ## Requirements
 See `requirements.txt`
 
+## Results (Baseline 1)
+| Model | Dataset | Accuracy |
+|---|---|---|
+| Zero-Shot (Llama-3.1-8B-Instant) | TruthfulQA MC | 52.8% (431/817) |
+| Self-Consistency | TruthfulQA MC | In progress |
+| SC + Entropy Filtering | TruthfulQA MC | Planned |
 
+## How to Run
+1. Open `notebooks/01_data_and_baseline1.ipynb` in Google Colab
+2. Mount your Google Drive when prompted
+3. Set your Groq API key in the relevant cell
+4. Run all cells in order
+
+## Notes
+- API keys are not committed to this repository. Set them as variables in the notebook.
+- Dataset files are saved to Google Drive under `ceng467_project/data/`
