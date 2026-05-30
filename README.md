@@ -1,64 +1,74 @@
 # Mitigating Hallucinations via Epistemic Uncertainty
+
 CENG 467 – Natural Language Understanding and Generation  
-İzmir Institute of Technology, Spring 2026
+İzmir Institute of Technology, Spring 2026  
+Student ID: 310201051
 
 ## Project Description
-This project designs a generation pipeline that estimates epistemic uncertainty 
-of LLM outputs using self-consistency sampling and entropy-based filtering to 
+
+This project designs a generation pipeline that estimates epistemic uncertainty
+of LLM outputs using self-consistency sampling and entropy-based filtering to
 mitigate hallucinations in question answering tasks.
 
 ## Datasets
+
 - **TruthfulQA** – 817 multiple-choice questions (Hugging Face: `truthful_qa`)
-- **HaluEval QA** – 10,000 QA samples with hallucinated/correct answer pairs
-
-## Repository Structure
-├── data/               # Dataset download and preprocessing scripts
-
-├── baselines/          # Baseline implementation scripts
-
-├── evaluation/         # Evaluation and metric scripts
-
-├── notebooks/          # Experiment notebooks
-
-├── requirements.txt    # Python dependencies
-
-└── README.md
-
-## Setup
-```bash
-pip install -r requirements.txt
-```
+- **HaluEval QA** – 200-sample subset (from 10,000 QA pairs with hallucinated/correct answer pairs)
 
 ## Methods
+
 | Approach | Description |
-|---|---|
-| Zero-shot CoT | Single response with chain-of-thought prompting |
-| Self-Consistency | Majority vote over N sampled responses |
-| SC + Entropy Filtering | Abstain when response entropy exceeds threshold |
+|----------|-------------|
+| Zero-Shot Prompting | Single deterministic response (temperature=0) |
+| Self-Consistency | Majority vote over N=5 sampled responses (temperature=0.7) |
+| Entropy Filtering | Abstain on questions where normalized entropy ≥ threshold |
 
-## Evaluation
-- **TruthfulQA** (MC): Accuracy
-- **HaluEval QA**: Pairwise hallucination detection
+## Results
 
-## Requirements
-See `requirements.txt`
+### TruthfulQA (817 samples, multiple-choice)
 
-## Results (Baseline 1)
-| Model | Dataset | Accuracy |
-|---|---|---|
-| Zero-Shot (Llama-3.1-8B-Instant) | TruthfulQA MC | 52.8% (431/817) |
-| Self-Consistency | TruthfulQA MC | In progress |
-| SC + Entropy Filtering | TruthfulQA MC | Planned |
+| Method | Accuracy | Coverage |
+|--------|----------|----------|
+| Baseline 1: Zero-Shot | 52.8% (431/817) | 100% |
+| Baseline 2: Self-Consistency (N=5) | 53.0% (433/817) | 100% |
+| Baseline 3: Entropy Filtering (t=0.1) | 62.7% (598/817) | 73.2% |
+
+### HaluEval QA (200 samples, open-ended)
+
+| Method | Accuracy | Avg H_norm |
+|--------|----------|------------|
+| Self-Consistency (N=5) | 92.5% (185/200) | 0.081 |
+| Low entropy subset (H < 0.3) | 96.1% | — |
+| High entropy subset (H ≥ 0.7) | 60.0% | — |
+
+## Key Finding
+
+Entropy is a reliable uncertainty signal across both datasets and task formats:
+- Low entropy → model is confident → higher accuracy
+- High entropy → model is uncertain → accuracy drops significantly
+
+## Setup
+
+```bash
+pip install groq datasets numpy matplotlib
+```
 
 ## How to Run
-1. Open `notebooks/01_data_and_baseline1.ipynb` in Google Colab
+
+1. Open `467_term_project.ipynb` in Google Colab
 2. Mount your Google Drive when prompted
 3. Set your Groq API key in the relevant cell
 4. Run all cells in order
 
-## Notes
-- Dataset files are saved to Google Drive under `ceng467_project/data/`
+## Repository Structure
+├── 467_term_project.ipynb   # Main experiment notebook
+├── baselines/               # Baseline scripts
+├── data/                    # Data preprocessing
+├── evaluation/              # Evaluation metrics
+├── requirements.txt
+└── README.md
 
-## Prompts & API Configuration
-Prompt templates and API configuration are documented in `notebooks/data_and_baseline1.ipynb`.
-API keys are loaded as variables in the notebook and are not committed to this repository.
+## Notes
+
+- Dataset files are saved to Google Drive under `ceng467_project/data/`
+- API keys are not committed to this repository
