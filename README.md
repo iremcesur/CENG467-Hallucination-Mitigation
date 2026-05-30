@@ -61,6 +61,7 @@ pip install groq datasets numpy matplotlib
 4. Run all cells in order
 
 ## Repository Structure
+
 ├── 467_term_project.ipynb   # Main experiment notebook
 ├── baselines/               # Baseline scripts
 ├── data/                    # Data preprocessing
