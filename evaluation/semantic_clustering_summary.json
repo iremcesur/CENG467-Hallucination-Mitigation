@@ -1,0 +1,6 @@
+{
+  "auroc_syntactic": 0.734954954954955,
+  "auroc_semantic": 0.4972972972972973,
+  "mean_clusters_per_sample": 1.07,
+  "correlation_syntactic_semantic": 0.34150026788953874
+}
