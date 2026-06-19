@@ -1,4 +1,4 @@
-\documentclass[runningheads]{llncs}
+\documentclass{llncs}
 
 \usepackage[T1]{fontenc}
 \usepackage{graphicx}
@@ -6,6 +6,7 @@
 \usepackage{amsmath}
 \usepackage{hyperref}
 \usepackage{url}
+\usepackage{placeins}
 
 \begin{document}
 
@@ -22,140 +23,113 @@ Izmir Institute of Technology, Izmir, Turkey\\
 
 \begin{abstract}
 Hallucination in large language models (LLMs) remains a critical obstacle for
-reliable deployment. In this work, we investigate whether \emph{epistemic
-uncertainty}, quantified via Shannon entropy over self-sampled responses, can
-serve as an effective proxy for answer reliability. We evaluate three baselines
-on the TruthfulQA multiple-choice benchmark (817 questions) and the HaluEval QA
-dataset (200-sample subset) using Llama-3.1-8B-Instant via the Groq API.
-Baseline~1 (zero-shot prompting) achieves 52.8\% accuracy. Baseline~2
-(self-consistency with majority voting, $N{=}5$) achieves 53.0\%. Baseline~3
-(entropy filtering at threshold $t{=}0.1$) achieves 62.7\% accuracy at 73.2\%
-coverage, a $+9.9$ percentage-point gain over zero-shot on answered questions.
-Entropy bucket analysis confirms the signal: low-entropy questions ($H{<}0.3$)
-yield 60.3\% accuracy on TruthfulQA and 96.1\% on HaluEval, while high-entropy
-questions ($H{\geq}0.7$) drop to 33.3\% and 60.0\% respectively. These results
-demonstrate that entropy-based abstention is a simple, training-free mechanism
-that meaningfully reduces hallucination rates in black-box LLM settings.
+reliable deployment. We investigate whether \emph{epistemic uncertainty},
+quantified via Shannon entropy over self-sampled responses, can serve as an
+effective proxy for answer reliability. We evaluate three baselines on
+TruthfulQA (817 questions) and HaluEval QA (200-sample subset) using
+Llama-3.1-8B-Instant via the Groq API. Zero-shot prompting achieves 52.8\%
+accuracy; self-consistency ($N{=}5$) achieves 53.0\%; entropy filtering
+($t{=}0.1$) achieves 62.7\% accuracy at 73.2\% coverage, a $+9.9$
+percentage-point gain. Entropy bucket analysis confirms the signal:
+low-entropy questions ($H{<}0.3$) yield 60.3\% accuracy on TruthfulQA and
+96.1\% on HaluEval, versus 33.3\% and 60.0\% for high-entropy questions
+($H{\geq}0.7$). We further validate entropy with AUROC\,=\,0.640
+(TruthfulQA) and 0.735 (HaluEval), and abstention F1\,=\,0.727 and 0.948.
+Calibration analysis (ECE) shows the confidence signal is well calibrated on
+HaluEval (0.076) but poorly calibrated on TruthfulQA (0.367); temperature
+scaling reduces ECE by 82.0\% and 69.5\% respectively. We additionally test
+semantic clustering as a refinement, finding it unexpectedly degrades
+discriminative power on HaluEval (AUROC 0.735$\to$0.497) because sampled
+responses are overwhelmingly near-paraphrases regardless of correctness.
+These results show entropy-based abstention is a simple, training-free
+mechanism that meaningfully reduces hallucination in black-box LLM settings,
+while highlighting calibration as a necessary complement to raw entropy
+filtering.
+\keywords{Hallucination mitigation \and Epistemic uncertainty \and
+Self-consistency \and Shannon entropy \and TruthfulQA \and HaluEval \and
+AUROC \and Model calibration}
 \end{abstract}
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Introduction}
 % ─────────────────────────────────────────────────────────────────────────────
 
-Large language models (LLMs) have achieved remarkable performance across a wide
-range of natural language processing tasks. However, they remain prone to
-hallucination — generating fluent, confident-sounding text that is factually
-incorrect~\cite{ji2023survey}. This phenomenon poses serious risks in
-high-stakes domains such as healthcare, law, and education, where factual
-accuracy is non-negotiable.
-
-A key challenge is that LLMs typically produce point estimates without any
-accompanying uncertainty signal. A model may be equally fluent when answering a
-question it has memorized reliably and when confabulating a plausible-sounding
-but false response. Distinguishing these two cases without external verification
-is, in general, intractable.
+Large language models (LLMs) achieve strong performance across NLP tasks but
+remain prone to hallucination — generating fluent, confident text that is
+factually incorrect~\cite{ji2023survey}. This poses serious risks in
+high-stakes domains such as healthcare, law, and education. A key challenge is
+that LLMs produce point estimates without any accompanying uncertainty
+signal: a model is equally fluent whether recalling a fact reliably or
+confabulating a plausible-sounding falsehood.
 
 This paper investigates whether \emph{epistemic uncertainty} — the model's
 internal uncertainty about the correct answer — can be estimated cheaply and
-used to filter out unreliable responses. Specifically, we adopt the
-self-consistency framework of Wang et al.~\cite{wang2023selfconsistency}: we
-sample $N{=}5$ independent responses from the model with stochastic decoding and
-compute the Shannon entropy of the resulting vote distribution as an uncertainty
-proxy.
+used to filter unreliable responses. We adopt the self-consistency framework
+of Wang et al.~\cite{wang2023selfconsistency}: sample $N{=}5$ independent
+responses with stochastic decoding and compute the Shannon entropy of the
+resulting vote distribution as an uncertainty proxy. Our hypothesis is that
+low-entropy predictions (the model converges to the same answer across
+samples) are more likely correct than high-entropy predictions (responses
+scatter). If so, an entropy-based abstention policy should trade coverage for
+accuracy.
 
-Our key hypothesis is that low-entropy predictions (where the model converges to
-the same answer across multiple samples) are significantly more likely to be
-correct than high-entropy predictions (where responses scatter across options).
-If this hypothesis holds, a simple entropy-based abstention policy — answering
-only when entropy is below a threshold — should improve accuracy at the cost of
-reduced coverage.
-
-We evaluate this hypothesis on two complementary benchmarks: TruthfulQA~\cite{lin2022truthfulqa},
-a multiple-choice dataset specifically designed to elicit common misconceptions,
-and HaluEval~\cite{ji2023halueval}, an open-ended QA dataset with paired correct
-and hallucinated answers. We use Llama-3.1-8B-Instant via the Groq API as our
-test model. Our results confirm the hypothesis: entropy is a strong predictor of
-answer correctness, and entropy filtering provides substantial accuracy
-improvements over both zero-shot and self-consistency baselines.
+We evaluate this on two complementary benchmarks: TruthfulQA~\cite{lin2022truthfulqa}
+(multiple-choice, targeting common misconceptions) and
+HaluEval~\cite{ji2023halueval} (open-ended QA with paired correct/hallucinated
+answers), using Llama-3.1-8B-Instant via the Groq API. Beyond the core
+accuracy-coverage results, we validate entropy with standard
+uncertainty-quantification metrics (AUROC, F1, ECE) and directly test two
+proposed refinements — temperature scaling and semantic clustering — rather
+than leaving them as unexplored future work.
 
 % ─────────────────────────────────────────────────────────────────────────────
+\FloatBarrier
+
 \section{Related Work}
 \label{sec:related}
 % ─────────────────────────────────────────────────────────────────────────────
 
-\subsection{Hallucination in LLMs}
-
-Ji et al.~\cite{ji2023survey} provide a comprehensive survey of hallucination in
-natural language generation, categorizing it into intrinsic hallucination
-(contradicting the source), extrinsic hallucination (introducing unverifiable
-information), and factual hallucination. They identify training data quality,
-exposure bias, and decoding strategies as primary contributing factors. Our work
-targets the inference-time perspective: given a fixed model, how can we identify
-likely hallucinations without gold references?
-
-\subsection{Self-Consistency Decoding}
-
-Wang et al.~\cite{wang2023selfconsistency} introduced self-consistency as a
-decoding strategy that samples multiple reasoning paths and aggregates via
-majority vote. Their original focus was on chain-of-thought prompting for
-arithmetic reasoning tasks, where diverse sampling improved accuracy by 10--20\%
-on benchmarks such as GSM8K and MATH. We adapt self-consistency as both a
-decoding baseline and an uncertainty estimation tool: the vote distribution
-entropy serves as our uncertainty signal rather than the accuracy improvement
-per se.
-
-\subsection{Uncertainty Quantification}
-
-Kadavath et al.~\cite{kadavath2022language} demonstrated that LLMs can, to a
-limited extent, estimate their own uncertainty through self-evaluation prompts.
-However, this requires an additional inference pass and can itself hallucinate.
-Kuhn et al.~\cite{kuhn2023semantic} introduced semantic entropy, which clusters
-semantically equivalent responses before computing entropy, reducing the spurious
-variance introduced by surface-form variation. Our approach uses syntactic
-majority voting rather than semantic clustering, which is computationally simpler
-and sufficient for our multiple-choice and binary-correctness settings.
-
-\subsection{Abstention and Selective Prediction}
-
-Selective prediction — choosing when to answer — is a classical framework in
-machine learning for trading off coverage against accuracy. In the context of
-LLMs, abstention has been explored through calibration and through
-retrieval-augmented generation. Our entropy filtering approach is an instance of
-selective prediction where the confidence score is derived from sampling
-variance rather than model logits, making it applicable to black-box API access
-scenarios.
+Ji et al.~\cite{ji2023survey} survey hallucination in NLG, distinguishing
+intrinsic, extrinsic, and factual hallucination, and identify training data
+quality and decoding strategy as key contributing factors; our work targets
+the inference-time question of identifying likely hallucinations without gold
+references. Wang et al.~\cite{wang2023selfconsistency} introduced
+self-consistency, sampling multiple reasoning paths and aggregating via
+majority vote, improving accuracy by 10--20\% on reasoning benchmarks such as
+GSM8K; we repurpose the resulting vote-distribution entropy as an uncertainty
+signal rather than using sampling purely for accuracy gains. Kadavath et
+al.~\cite{kadavath2022language} showed LLMs can verbalize calibrated
+confidence to a limited extent, though this requires an extra inference pass
+and can itself hallucinate. Kuhn et al.~\cite{kuhn2023semantic} proposed
+semantic entropy, clustering semantically equivalent responses before
+computing entropy to remove surface-form noise; we adopt syntactic majority
+voting as our primary method (sufficient for multiple-choice and binary
+correctness) and directly test semantic clustering as an extension in
+Section~\ref{sec:extended-analyses}. More broadly, our entropy-filtering
+approach is an instance of selective prediction~\cite{kadavath2022language},
+where the confidence score derives from sampling variance rather than model
+logits, making it applicable to black-box API settings.
 
 % ─────────────────────────────────────────────────────────────────────────────
+\FloatBarrier
+
 \section{Methodology}
 \label{sec:method}
 % ─────────────────────────────────────────────────────────────────────────────
 
-\subsection{Model and Infrastructure}
+\subsection{Model, Infrastructure, and Datasets}
 
-All experiments use Llama-3.1-8B-Instant accessed via the Groq API, which
-provides low-latency inference through dedicated hardware acceleration. Rate
-limiting was handled with exponential backoff (45-second pause on HTTP~429
-responses).
+All experiments use Llama-3.1-8B-Instant via the Groq API, with exponential
+backoff (45s) on rate-limit errors. \textbf{TruthfulQA}~\cite{lin2022truthfulqa}:
+the multiple-choice (mc1) validation split, 817 questions across 38
+misconception categories, average 5.04 choices per question (binary labels,
+1\,=\,correct); we use mc1 for simplicity of majority-vote aggregation.
+\textbf{HaluEval QA}~\cite{ji2023halueval}: 10{,}000 question-answer pairs
+with supporting \texttt{knowledge}, \texttt{question}, \texttt{right\_answer},
+and \texttt{hallucinated\_answer} fields; we randomly sample 200 examples
+(seed\,=\,42). Table~\ref{tab:datasets} summarizes both datasets.
 
-\subsection{Datasets}
-
-\textbf{TruthfulQA}~\cite{lin2022truthfulqa} — We use the multiple-choice (mc1)
-variant of the validation split, which contains 817 questions covering
-misconceptions across 38 categories including history, biology, law, and popular
-culture. Each sample contains a \texttt{question} string and \texttt{mc1\_targets},
-a dict of \texttt{choices} and binary \texttt{labels} (1\,=\,correct).
-The average number of choices per question is 5.04 (min: 2, max: 7).
-We use mc1 exclusively for simplicity of majority-vote aggregation.
-
-\textbf{HaluEval QA}~\cite{ji2023halueval} — HaluEval provides 10{,}000
-question-answer pairs in JSONL format. Each sample contains four fields:
-\texttt{knowledge} (supporting context), \texttt{question},
-\texttt{right\_answer}, and \texttt{hallucinated\_answer}.
-We randomly sample 200 examples (seed\,=\,42), standard practice for this benchmark.
-
-Table~\ref{tab:datasets} summarizes the structural properties of both datasets.
-
-\begin{table}[htbp]
+\begin{table}[h]
 \centering
 \caption{Dataset comparison summary.}
 \label{tab:datasets}
@@ -166,27 +140,20 @@ Table~\ref{tab:datasets} summarizes the structural properties of both datasets.
 Total samples      & 817                               & 10{,}000 (200 used)               \\
 Format             & Question + choices + labels       & Knowledge + Q + right/halluc.     \\
 Avg.\ choices      & 5.04 (mc1)                        & —                                 \\
-Split              & Single validation split           & No split                          \\
 Label type         & Binary per choice                 & Implicit (right vs.\ hallucinated)\\
 Primary use        & Accuracy-based evaluation         & Pairwise hallucination analysis   \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Baseline 1: Zero-Shot Prompting}
+\subsection{Baselines and Entropy Computation}
 
-The zero-shot baseline queries the model once per question at temperature~$= 0.0$
-(greedy decoding). The prompt presents the question and labeled options (A, B,
-C, \ldots) and instructs the model to respond with a single letter. This
-represents the standard deployment scenario with no uncertainty quantification.
-This prompting strategy follows the zero-shot chain-of-thought paradigm of
-Kojima et al.~\cite{kojima2022large}.
-
-\subsection{Baseline 2: Self-Consistency ($N{=}5$)}
-
-For Baseline~2, we sample $N{=}5$ independent completions per question at
-temperature~$= 0.7$. The final prediction is determined by majority vote over
-the $N$ letter responses. Shannon entropy over the vote distribution is computed as:
+\textbf{Baseline 1 (Zero-Shot)} queries the model once per question at
+temperature~$=0.0$, following the zero-shot chain-of-thought paradigm of
+Kojima et al.~\cite{kojima2022large}, instructing it to respond with a single
+letter. \textbf{Baseline 2 (Self-Consistency, $N{=}5$)} samples 5 independent
+completions at temperature~$=0.7$ and takes the majority vote. Shannon entropy
+over the vote distribution is:
 
 \begin{equation}
   H = -\sum_{i} p(i) \log p(i), \qquad
@@ -194,39 +161,36 @@ the $N$ letter responses. Shannon entropy over the vote distribution is computed
   \label{eq:entropy}
 \end{equation}
 
-\noindent where $p(i)$ is the proportion of votes for option $i$ and $K$ is the
-number of answer choices. Normalization ensures entropy values lie in $[0, 1]$
-regardless of the number of choices.
-
-\subsection{Baseline 3: Entropy Filtering}
-
-Baseline~3 applies entropy filtering on top of Baseline~2: the model commits to
-an answer only if $H_{\text{norm}} < t$. Questions at or above the threshold are
-abstained. We sweep $t \in \{0.1, 0.2, \ldots, 1.0\}$ and report accuracy and
-coverage at each threshold. We select $t{=}0.1$ as the optimal threshold, which
-maximizes accuracy subject to coverage $\geq 50\%$.
-
-\subsection{HaluEval Evaluation Protocol}
-
-For HaluEval, the model generates free-text answers to knowledge-grounded
-questions. Correctness is assessed via lexical matching: a response is marked
-correct if it contains at least 50\% of the content words (length~$> 3$
-characters) of the reference answer. Entropy is computed over the binary
-correct/incorrect distribution across $N{=}5$ samples, normalized by $\log 2$.
+\noindent where $p(i)$ is the vote proportion for option $i$ and $K$ the
+number of choices; normalizing keeps $H_{\text{norm}} \in [0,1]$ regardless of
+$K$. \textbf{Baseline 3 (Entropy Filtering)} answers only when
+$H_{\text{norm}} < t$, abstaining otherwise; we sweep $t \in \{0.1,\ldots,1.0\}$
+and select $t{=}0.1$, which maximizes accuracy subject to coverage
+$\geq 50\%$. For \textbf{HaluEval}, the model generates free-text answers;
+correctness uses lexical matching (response must contain $\geq 50\%$ of the
+reference answer's content words, length $>3$), and entropy is computed over
+the binary correct/incorrect split across the 5 samples, normalized by
+$\log 2$.
 
 % ─────────────────────────────────────────────────────────────────────────────
+\FloatBarrier
+
 \section{Results}
 \label{sec:results}
 % ─────────────────────────────────────────────────────────────────────────────
 
-\subsection{Baseline Comparison on TruthfulQA}
+\subsection{Baseline Comparison and Entropy Buckets}
 
-Table~\ref{tab:baselines} summarizes the performance of the three baselines on
-TruthfulQA.
+Table~\ref{tab:baselines} summarizes the three baselines on TruthfulQA.
+Self-consistency yields only a marginal $+0.2\%$ over zero-shot — expected,
+since TruthfulQA is primarily factual recall rather than multi-step reasoning,
+limiting the benefit of sample aggregation. Entropy filtering provides the
+real gain: answering only the 598 questions (73.2\%) where the model is most
+confident raises accuracy to 62.7\% ($+9.9$ points over zero-shot).
 
-\begin{table}[htbp]
+\begin{table}[h]
 \centering
-\caption{Baseline comparison on TruthfulQA (817 questions, Llama-3.1-8B-Instant).}
+\caption{Baseline comparison on TruthfulQA (817 questions).}
 \label{tab:baselines}
 \begin{tabular}{lcccc}
 \toprule
@@ -234,25 +198,19 @@ TruthfulQA.
 \midrule
 Baseline 1 — Zero-Shot ($t{=}0.0$)         & 431 & 817 & 52.8\% & 100\%  \\
 Baseline 2 — Self-Consistency ($N{=}5$)    & 433 & 817 & 53.0\% & 100\%  \\
-Baseline 3 — Entropy Filtering ($t{=}0.1$) & 458 & 598 & 62.7\% & 73.2\% \\
+Baseline 3 — Entropy Filtering ($t{=}0.1$) & 375 & 598 & 62.7\% & 73.2\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Baseline~2 provides only a marginal $+0.2\%$ improvement over Baseline~1,
-consistent with prior findings that self-consistency gains are largest on
-reasoning tasks with longer chains of thought. On TruthfulQA, the questions are
-primarily factual recall, limiting the benefit of multi-sample aggregation. The
-major improvement comes from Baseline~3: by answering only the 598 questions
-(73.2\%) where the model is most confident, accuracy rises to 62.7\% — a $+9.9$
-percentage-point gain over zero-shot.
+Table~\ref{tab:buckets} confirms the entropy signal directly: low-entropy
+TruthfulQA questions reach 60.3\% accuracy versus 26.3\% for medium entropy
+(the $n{=}12$ high-entropy bucket is too small to be reliable). On HaluEval
+the pattern is sharper still (96.1\% vs.\ 60.0\%), and 90\% of samples fall in
+the low-entropy bucket — knowledge-grounded questions tend to have clear,
+consistently-reproduced answers.
 
-\subsection{Entropy Bucket Analysis}
-
-Table~\ref{tab:buckets} breaks down accuracy by normalized entropy bucket across
-both datasets.
-
-\begin{table}[htbp]
+\begin{table}[h]
 \centering
 \caption{Accuracy by normalized entropy bucket ($H_{\text{norm}}$).}
 \label{tab:buckets}
@@ -267,150 +225,274 @@ High  ($H_{\text{norm}} \geq 0.7$)         &  12 & 33.3\% &  20 & 60.0\% \\
 \end{tabular}
 \end{table}
 
-The entropy signal is strong and consistent. On TruthfulQA, low-entropy
-questions achieve 60.3\% accuracy versus 26.3\% for medium-entropy questions.
-The high-entropy bucket is small ($n{=}12$) and shows a slight uptick to 33.3\%,
-likely due to statistical noise at small sample size. On HaluEval, the pattern
-is even more pronounced: low-entropy responses achieve 96.1\% accuracy, while
-high-entropy responses fall to 60.0\%. The HaluEval entropy distribution is
-markedly more bimodal: 90\% of samples fall in the low-entropy bucket, reflecting
-that most knowledge-grounded factual questions have clear answers the model
-converges on consistently.
+Figure~\ref{fig:coverage} shows the accuracy--coverage trade-off as $t$
+varies; stricter thresholds raise accuracy but reduce coverage, degrading to
+the Baseline-2 level (53.0\%) once all questions are answered. Figure~\ref{fig:buckets}
+shows the entropy-bucket pattern holds across both task formats.
 
-\subsection{Accuracy--Coverage Trade-off}
-
-Figure~\ref{fig:coverage} shows the accuracy--coverage curve as the entropy
-threshold varies from 0.1 to 1.0 on TruthfulQA. The curve illustrates a clear
-monotonic trade-off: stricter thresholds yield higher accuracy but lower
-coverage. At $t{=}1.0$ (all questions answered), accuracy degrades to the
-Baseline~2 level of 53.0\%.
-
-\begin{figure}[htbp]
+\begin{figure}[h]
   \centering
-  \includegraphics[width=0.82\textwidth]{baseline3_accuracy_coverage.png}
+  \includegraphics[width=0.75\textwidth]{baseline3_accuracy_coverage.png}
   \caption{Accuracy vs.\ coverage trade-off for entropy filtering on TruthfulQA.
-  The red dot marks the optimal point ($t{=}0.1$, 62.7\% accuracy, 73.2\%
-  coverage). Dashed lines show Baseline~1 (52.8\%) and Baseline~2 (53.0\%).}
+  Red dot: optimal point ($t{=}0.1$). Dashed lines: Baseline 1/2.}
   \label{fig:coverage}
 \end{figure}
 
-Figure~\ref{fig:buckets} compares accuracy across entropy buckets for both
-datasets side by side, illustrating that the entropy--accuracy relationship holds
-across different task formats (multiple-choice vs.\ open-ended).
-
-\begin{figure}[htbp]
+\begin{figure}[h]
   \centering
-  \includegraphics[width=\textwidth]{entropy_bucket_comparison.png}
-  \caption{Accuracy by entropy bucket for TruthfulQA (left) and HaluEval
-  (right). Dashed lines show overall self-consistency accuracy. Low entropy
-  consistently correlates with high accuracy across both datasets.}
+  \includegraphics[width=0.92\textwidth]{entropy_bucket_comparison.png}
+  \caption{Accuracy by entropy bucket, TruthfulQA (left) vs.\ HaluEval (right).}
   \label{fig:buckets}
 \end{figure}
 
-\subsection{Error Analysis}
+\subsection{Additional Evaluation Metrics}
+\label{sec:additional-metrics}
 
-We examine three categories of failure cases on TruthfulQA to characterize the
-remaining errors after entropy filtering.
+Accuracy and coverage alone do not establish that entropy is a
+\emph{statistically reliable} predictor or that it is \emph{calibrated}. We
+report AUROC (discriminative power), Precision/Recall/F1 (the abstention
+decision as binary classification), and Expected Calibration Error (ECE).
 
-\textbf{False confidence} (low entropy, wrong answer) is the most dangerous
-failure mode: the model converges on an incorrect answer across all $N{=}5$
-samples. These cases represent hallucinations that the entropy filter cannot
-catch. They tend to cluster in categories where the model has strongly
-internalized a common misconception — for example, questions about health myths
-and legal folklore, where the ``intuitive'' wrong answer is more prevalent in
-pretraining data than the correct one.
+\textbf{AUROC.} Using $-H_{\text{norm}}$ as a score, we measure how well it
+separates correct from incorrect responses (0.5\,=\,random, 1.0\,=\,perfect).
+Table~\ref{tab:auroc} shows both datasets clear the random baseline, with
+HaluEval's cleaner (near-binary) entropy distribution yielding stronger
+separation. Figure~\ref{fig:roc} shows the full ROC curves.
 
-\textbf{High-entropy correct} cases occur when the model votes for the correct
-answer in the majority but with scattered votes (e.g., 3--2 split). Entropy
-filtering at $t{=}0.1$ abstains on these, sacrificing correct answers for
-coverage reduction. These represent the primary cost of the abstention policy.
-
-\textbf{Near-miss errors} arise when the majority vote lands on a semantically
-adjacent but technically incorrect option. This is particularly common in
-TruthfulQA questions with multiple plausible-sounding distractors, and motivates
-the use of semantic clustering (Kuhn et al.~\cite{kuhn2023semantic}) as a
-future refinement.
-
-Table~\ref{tab:errors} illustrates the approximate distribution of error types
-at the optimal threshold $t{=}0.1$.
-
-\begin{table}[htbp]
+\begin{table}[h]
 \centering
-\caption{Error type distribution on TruthfulQA at $t{=}0.1$ (598 answered questions).}
-\label{tab:errors}
-\begin{tabular}{lcc}
+\caption{AUROC of normalized entropy as a correctness predictor.}
+\label{tab:auroc}
+\begin{tabular}{lccc}
 \toprule
-\textbf{Error Type}             & \textbf{Count (approx.)} & \textbf{\% of answered} \\
+\textbf{Dataset} & \textbf{N} & \textbf{N Correct} & \textbf{AUROC} \\
 \midrule
-Correct answers                 & 458                       & 76.6\%                  \\
-False confidence (wrong, low H) & $\sim$110                 & $\sim$18.4\%            \\
-Near-miss errors                & $\sim$30                  & $\sim$5.0\%             \\
+TruthfulQA & 817 & 433 & 0.640 \\
+HaluEval   & 200 & 185 & 0.735 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The false-confidence cases are concentrated in TruthfulQA categories such as
-\emph{Health} (e.g., vaccine myths), \emph{Law} (e.g., legal misconceptions),
-and \emph{Conspiracies}, consistent with prior findings that smaller models
-disproportionately reproduce culturally prevalent falsehoods~\cite{lin2022truthfulqa}.
-These categories warrant domain-specific calibration in future work.
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.65\textwidth]{auroc_curve.png}
+  \caption{ROC curves: entropy discriminating correct/incorrect responses.}
+  \label{fig:roc}
+\end{figure}
+
+\textbf{Precision/Recall/F1.} Framing entropy filtering at $t{=}0.1$ as a
+binary classifier (Table~\ref{tab:f1}): on TruthfulQA, recall (0.866) exceeds
+precision (0.627) — the filter answers most correct questions but also lets
+through many confidently-wrong ones (Section~\ref{sec:error-analysis}). On
+HaluEval both exceed 0.93, reflecting the cleaner signal there.
+
+\begin{table}[h]
+\centering
+\caption{Precision, Recall, F1 of entropy-based abstention at $t{=}0.1$.}
+\label{tab:f1}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Dataset} & \textbf{Precision} & \textbf{Recall} & \textbf{F1} \\
+\midrule
+TruthfulQA & 0.627 & 0.866 & 0.727 \\
+HaluEval   & 0.961 & 0.935 & 0.948 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{ECE.} We assess whether $1-H_{\text{norm}}$ is a well-calibrated
+confidence score using 10 equal-width bins:
+$\text{ECE} = \sum_{b} \frac{n_b}{N}\left|\text{acc}(b)-\text{conf}(b)\right|$.
+HaluEval is reasonably well calibrated (0.076); TruthfulQA is not (0.367) —
+confidence systematically overstates accuracy (Table~\ref{tab:ece},
+Figure~\ref{fig:calibration}). This means entropy \emph{discriminates}
+effectively (Table~\ref{tab:auroc}) but is not directly interpretable as a
+calibrated probability on TruthfulQA.
+
+\begin{table}[h]
+\centering
+\caption{Expected Calibration Error (ECE) of $1-H_{\text{norm}}$.}
+\label{tab:ece}
+\begin{tabular}{lc}
+\toprule
+\textbf{Dataset} & \textbf{ECE} \\
+\midrule
+TruthfulQA & 0.367 \\
+HaluEval   & 0.076 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.92\textwidth]{calibration_diagram.png}
+  \caption{Reliability diagrams: TruthfulQA (ECE\,=\,0.367) vs.\ HaluEval (ECE\,=\,0.076).}
+  \label{fig:calibration}
+\end{figure}
+
+\subsection{Error Analysis}
+\label{sec:error-analysis}
+
+Among the 598 TruthfulQA questions answered at $t{=}0.1$, 375 are correct and
+223 (37.3\%) are \textbf{false-confidence} errors: the model converges on a
+wrong answer with full agreement across samples (Table~\ref{tab:errors}).
+Manual inspection shows these consistently reflect intuitive but factually
+wrong options — e.g., misattributing ``I cannot tell a lie'' or
+misidentifying the world's smallest country — i.e., misconceptions
+prevalent in the pretraining corpus itself, where low sampling variance
+reflects consistency, not correctness. The complementary cost is
+\textbf{high-entropy correct} cases: questions the model would have answered
+correctly but where votes split enough to trigger abstention, visible in the
+gap between Baseline 2's 53.0\% overall accuracy and the 86.6\% recall in
+Table~\ref{tab:f1}.
+
+\begin{table}[h]
+\centering
+\caption{Outcome distribution on TruthfulQA at $t{=}0.1$ (598 answered).}
+\label{tab:errors}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Outcome}                  & \textbf{Count} & \textbf{\% of answered} \\
+\midrule
+Correct                           & 375            & 62.7\%                  \\
+False confidence (wrong, low $H$) & 223            & 37.3\%                  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+This 37.3\% rate quantifies why calibration matters: entropy discriminates
+well in aggregate (AUROC\,=\,0.640) but full sample agreement gives no further
+signal to flag these residual errors — addressing them likely requires
+orthogonal techniques such as retrieval augmentation or external fact
+verification.
+
+\subsection{Extended Analyses}
+\label{sec:extended-analyses}
+
+Rather than leaving calibration and semantic clustering as unexplored future
+work, we test both directly using the existing sampled responses (no new API
+calls).
+
+\textbf{Temperature scaling.} We fit a single scalar $T$ minimizing
+negative log-likelihood on the correctness labels, rescaling confidence as
+$\sigma(\text{logit}(c)/T)$. This reduces ECE by 82.0\% on TruthfulQA and
+69.5\% on HaluEval (Table~\ref{tab:tempscale}, Figure~\ref{fig:tempscale}).
+The large fitted $T$ on TruthfulQA (27.23) indicates the raw confidence needed
+substantial flattening toward the base accuracy rate — consistent with its
+weaker AUROC relative to HaluEval.
+
+\begin{table}[h]
+\centering
+\caption{Effect of temperature scaling on ECE.}
+\label{tab:tempscale}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Dataset} & \textbf{Fitted $T$} & \textbf{ECE before} & \textbf{ECE after} \\
+\midrule
+TruthfulQA & 27.23 & 0.367 & 0.066 \\
+HaluEval   & 4.43  & 0.076 & 0.023 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.92\textwidth]{temperature_scaling_calibration.png}
+  \caption{Reliability diagrams before/after temperature scaling.}
+  \label{fig:tempscale}
+\end{figure}
+
+\textbf{Semantic clustering.} Kuhn et al.~\cite{kuhn2023semantic} argue
+semantically equivalent responses with different wording should count as
+agreement. We embed each HaluEval sample's 5 responses with
+\texttt{all-MiniLM-L6-v2} and apply agglomerative clustering (cosine
+distance, threshold\,=\,0.3) before recomputing entropy over the cluster
+distribution. The result is counter to expectation: semantic entropy
+\emph{degrades} discrimination to near-random (Table~\ref{tab:semantic}).
+Inspection shows the mean clusters per sample was only 1.07/5 — the model's
+sampled responses are nearly always semantically equivalent paraphrases, even
+when lexical matching marks the majority answer wrong. The model often
+expresses the \emph{same} (sometimes incorrect) claim in different words, so
+clustering collapses nearly every sample into one cluster regardless of
+correctness, destroying the variance the syntactic signal relies on. For this
+task, syntactic disagreement is itself informative about genuine content
+uncertainty, and semantic clustering does not straightforwardly transfer the
+benefits reported by Kuhn et al.
+
+\begin{table}[h]
+\centering
+\caption{Syntactic vs.\ semantic entropy as a correctness predictor (HaluEval).}
+\label{tab:semantic}
+\begin{tabular}{lc}
+\toprule
+\textbf{Entropy variant} & \textbf{AUROC} \\
+\midrule
+Syntactic (binary correct/incorrect) & 0.735 \\
+Semantic (embedding clusters)        & 0.497 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 % ─────────────────────────────────────────────────────────────────────────────
+\FloatBarrier
+
 \section{Discussion}
 \label{sec:discussion}
 % ─────────────────────────────────────────────────────────────────────────────
 
-\subsection{Entropy as a Hallucination Proxy}
+Normalized Shannon entropy over self-sampled responses is a practical
+hallucination proxy: when a model has reliably encoded a fact, its outputs
+are robust to decoding perturbations (low entropy); when it must interpolate
+between imperfectly learned patterns, sampling variance — and entropy — rise.
 
-Our results provide empirical support for using normalized Shannon entropy over
-self-sampled vote distributions as a practical hallucination proxy. The mechanism
-is intuitive: when a model has reliably encoded a fact during training, its
-outputs are robust to stochastic perturbations in decoding, producing a
-low-entropy vote distribution. Conversely, hallucinated responses arise when the
-model must interpolate between imperfectly learned patterns, leading to higher
-sampling variance and thus higher entropy.
-
-\subsection{Limitations}
-
-Several limitations qualify our conclusions. First, $N{=}5$ samples is a
-relatively small ensemble; prior work on self-consistency typically uses
-$N{=}20$--$40$, which would likely sharpen entropy estimates and improve the
-accuracy--coverage trade-off. The choice of $N{=}5$ was driven by Groq API rate
-limits.
-
-Second, our correctness criterion for HaluEval is lexical matching, a noisy
-proxy for semantic correctness. A more robust evaluation would use
-embedding-based similarity or an LLM judge~\cite{kadavath2022language}.
-
-Third, 26.8\% of questions are abstained at $t{=}0.1$, which requires either a
-fallback strategy or user-facing abstention messages in real deployment.
-
-Fourth, while Kuhn et al.~\cite{kuhn2023semantic} showed that semantic
-clustering before entropy computation is more robust to surface-form variation,
-our simplified syntactic majority vote suffices for multiple-choice settings but
-may underestimate agreement on open-ended tasks.
+\textbf{Limitations.} (1) $N{=}5$ is a small ensemble relative to the
+$N{=}20$--$40$ typical in prior work; this was constrained by Groq API rate
+limits and would likely sharpen entropy estimates if increased. (2) The
+HaluEval correctness criterion (lexical matching) is a noisy proxy for
+semantic correctness; embedding-based similarity or an LLM judge would be
+more robust. (3) 26.8\% of TruthfulQA questions are abstained at $t{=}0.1$,
+requiring a fallback strategy in real deployment. (4) We directly tested
+semantic clustering (Section~\ref{sec:extended-analyses}) and found it
+\emph{underperforms} our syntactic approach on HaluEval (AUROC 0.735$\to$0.497),
+since responses are overwhelmingly near-paraphrases; this finding may not
+generalize to settings with more lexically diverse outputs. (5) Raw entropy-derived
+confidence is poorly calibrated on TruthfulQA (ECE\,=\,0.367); we addressed
+this with temperature scaling (Section~\ref{sec:extended-analyses}), cutting
+ECE by 82.0\%/69.5\%, and recommend such post-hoc correction for applications
+requiring calibrated probabilities rather than raw entropy scores.
 
 % ─────────────────────────────────────────────────────────────────────────────
+\FloatBarrier
+
 \section{Conclusion}
 \label{sec:conclusion}
 % ─────────────────────────────────────────────────────────────────────────────
 
-We have shown that normalized Shannon entropy over self-sampled response
-distributions is an effective, training-free proxy for epistemic uncertainty in
-LLMs. Applying entropy-based abstention to Llama-3.1-8B-Instant on TruthfulQA,
-we achieve a $+9.9$ percentage-point accuracy improvement over zero-shot
-prompting while answering 73.2\% of questions. On HaluEval, the entropy signal
-is even stronger: low-entropy responses reach 96.1\% accuracy versus 60.0\% for
-high-entropy responses.
+Normalized Shannon entropy over self-sampled responses is an effective,
+training-free proxy for epistemic uncertainty in LLMs. Entropy-based
+abstention on TruthfulQA yields a $+9.9$ percentage-point accuracy gain over
+zero-shot while answering 73.2\% of questions; on HaluEval the signal is
+stronger still. Beyond accuracy-coverage, we validated entropy with AUROC
+(0.640/0.735) and F1 (0.727/0.948), and directly tested two proposed
+refinements rather than leaving them speculative: temperature scaling
+substantially improved calibration (ECE $-82.0\%$/$-69.5\%$), while semantic
+clustering unexpectedly degraded discrimination on HaluEval, since sampled
+responses are overwhelmingly near-paraphrases regardless of correctness.
 
-These results suggest that selective prediction via entropy filtering is a
-practical first-line defense against hallucination in black-box LLM deployments.
-Future work should investigate (1) larger sample sizes ($N{\geq}20$), (2)
-semantic clustering before entropy estimation~\cite{kuhn2023semantic}, (3)
-combination with retrieval-augmented generation for abstained questions, and (4)
-extension to generation tasks beyond factual QA.
+These results position entropy filtering as a practical first-line defense
+against hallucination in black-box LLM deployments, but not a complete
+solution: low entropy indicates the model is \emph{consistent}, not that it
+is \emph{correct}, particularly on benchmarks like TruthfulQA that target
+ingrained misconceptions — illustrated by the 37.3\% false-confidence rate
+among answered questions. Remaining future work includes larger sample sizes
+($N{\geq}20$, beyond our API budget here), combination with
+retrieval-augmented generation or external fact verification to catch
+high-confidence hallucinations that sampling-based uncertainty cannot detect,
+and extension to generation tasks beyond factual QA.
 
 % ─────────────────────────────────────────────────────────────────────────────
+\FloatBarrier
+
 \bibliographystyle{splncs04}
 \bibliography{references}
 
